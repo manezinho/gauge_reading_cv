@@ -9,7 +9,22 @@ import numpy as np
 import time
 import matplotlib
 from matplotlib import pyplot as plt
+import pandas as pd
 
+
+def avg_circles(circles, b):
+    avg_x=0
+    avg_y=0
+    avg_r=0
+    for i in range(b):
+        #optional - average for multiple circles (can happen when a gauge is at a slight angle)
+        avg_x = avg_x + circles[0][i][0]
+        avg_y = avg_y + circles[0][i][1]
+        avg_r = avg_r + circles[0][i][2]
+    avg_x = int(avg_x/(b))
+    avg_y = int(avg_y/(b))
+    avg_r = int(avg_r/(b))
+    return avg_x, avg_y, avg_r
 
 # find distance between two points
 def dist_2_pts(x1, y1, x2, y2):
@@ -33,25 +48,100 @@ def calibrate_gauge(img, gauge_number, file_type):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) 
     # blur image
     img_blur = cv2.medianBlur(gray,5)
+    thresh = 175
+    maxvalue = 255
+    th_gaussian = cv2.adaptiveThreshold(gray,maxvalue,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
+    edges = cv2.Canny(img,100,200)
 
-    circles = cv2.HoughCircles(img_blur, cv2.HOUGH_GRADIENT, 1, img.shape[0]/64, param1=200, param2=10, minRadius=np.int(height*0.35), maxRadius=np.int(height*0.48))
+
+    # Otsu's thresholding after Gaussian filtering
+    blur = cv2.GaussianBlur(gray,(5,5),0)
+    ret_otsu_blur,th_otsu_blur = cv2.threshold(blur,0,maxvalue,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+    ret_otsu,th_otsu = cv2.threshold(gray,0,maxvalue,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
+
+    # min and max size of circles
+    r_min = np.int(height*0.30)
+    r_max = np.int(height*0.45)
+
+    # param1 controls sensitivity; how strong the edges need to be
+    # param2 will set how many points it needs to declare that it's found a circle. "ideal value of param 2 will be related to the circumference of the circles"
+    param1_default = 200
+    param2_default = 10
+    param1 = 300
+    param2 = 30
+
+    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, 1, img.shape[0]/64, param1=300, param2=30, minRadius=r_min, maxRadius=r_max)
 
     # average found circles, found it to be more accurate than trying to tune HoughCircles parameters to get just the right one
     a, b, c = circles.shape
+    circles = circles[0] # the first index has ALL circles
+    print('{} total number of circles have been found before filtering'.format(circles.shape[0]))
+    # # calculate center x,y of image
+    picture_center_x = np.around(width/2)
+    picture_center_y = np.around(height/2)
 
-    # I am selecting just first circle for now; [][row][column] = [][nth circle][x,y or r]
-    x = np.int(circles[0][0][0])
-    y = np.int(circles[0][0][1])
-    r = np.int(circles[0][0][2])
+    # calculate each circle's distance from picture center
+    circles = pd.DataFrame(circles)
+    circles.columns = ['x','y','r']
+    circles['dist from picture center'] = np.sqrt((circles['x'] - picture_center_x)**2 + (circles['y'] - picture_center_y)**2 )
+    # calculate standard deviation
+    circle_std = circles['dist from picture center'].std() 
+    # print
+    print('standard deviation of circle center and picture center distance: {}'.format(circle_std))
+    print(circles)
+
+    print('height and width are:')
+    print(height,width)
+
+    ########################################
+    ##### control hyperparameters
+    ########################################
+
+    # check if there are more than 50 circles
+    # if circles.shape[0] > 50:
+    #     while circles.shape[0] > 50:
+    #         # reduce the number of circles by recalculating circles
+    #         # increase param 1
+    #         param1 = param1 + 50
+    #         circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, 1, img.shape[0]/64, param1=param1, param2=param2, minRadius=r_min, maxRadius=r_max)
+    # if circles_std <
+
+
+
+    # circles = cv2.HoughCircles(th_otsu_blur, cv2.HOUGH_GRADIENT, 1, img.shape[0]/64, param1=300, param2=25, minRadius=r_min, maxRadius=r_max)
+
+    # printing all the circles on image to see what they look like
 
     # draw center and circle
-    # Draw a circle with blue line borders of thickness of 2 px 
+    # Draw a circle with blue line borders of thickness of 3 px 
     # image = cv2.circle(image, center_coordinates, radius, color, thickness) 
-    cv2.circle(img, (x, y), r, (0, 0, 255), 3, cv2.LINE_AA)  # draw circle
-    cv2.circle(img, (x, y), 2, (0, 255, 0), 3, cv2.LINE_AA)  # draw center of circle; this 2 is arbitrary center circle size
+
+    # circles = circles.apply(lambda row: np.int(np.around(row)))
+    # print(circles)
+
+    # circles.apply(lambda row: cv2.circle(img, (row['x'], row['y']), row['r'], (255, 0, 0), 1, cv2.LINE_AA), axis = 1)
+    # circles.apply(lambda row: cv2.circle(img, (row['x'], row['y']), 2, (0, 0, 255), 1, cv2.LINE_AA), axis = 1)
+    # cv2.imwrite('gauge-{}-circles.{}'.format(gauge_number, file_type), img)
+
+    # circles.apply(lambda row: print(row))
+
+    for index,row in circles.iterrows():
+        x = int(np.around(row['x']))
+        y = int(np.around(row['y']))
+        r = int(np.around(row['r']))
+        
+        # draw outer circle
+        cv2.circle(img, (x, y), r, (255, 0, 0), 1, cv2.LINE_AA)
+        # this r = 2 is arbitrary center circle size (center of circle)
+        cv2.circle(img, (x, y), 2, (0, 0, 255), 1, cv2.LINE_AA)  
+        cv2.imwrite('gauge-{}-circles.{}'.format(gauge_number, file_type), img)
+
+    x = 449
+    y = 390
+    r = 309
 
     #for testing, output circles on image
-    # cv2.imwrite('gauge-{}-circles.{}'.format(gauge_number, file_type), img)
+    #cv2.imwrite('gauge-{}-circles.{}'.format(gauge_number, file_type), img)
 
     #for calibration, plot lines from center going out at every 10 degrees and add marker
     #for i from 0 to 36 (every 10 deg)
@@ -88,7 +178,7 @@ def calibrate_gauge(img, gauge_number, file_type):
     #add the lines and labels to the image
     for i in range(0,interval):
         cv2.line(img, (int(p1[i][0]), int(p1[i][1])), (int(p2[i][0]), int(p2[i][1])),(0, 255, 0), 2)
-        cv2.putText(img, '{}'.format(int(i*separation)), (int(p_text[i][0]), int(p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 0.3,(0,0,0),1,cv2.LINE_AA)
+        cv2.putText(img, '{}'.format(int(i*separation)), (int(p_text[i][0]), int(p_text[i][1])), cv2.FONT_HERSHEY_SIMPLEX, 1,(0,0,0),2,cv2.LINE_AA)
 
     cv2.imwrite('gauge-{}-calibration.{}'.format(gauge_number, file_type), img)
 
@@ -103,11 +193,12 @@ def calibrate_gauge(img, gauge_number, file_type):
     # max_value = input('Max value: ') #maximum reading of the gauge
     # units = input('Enter units: ')
 
-    # for testing purposes
+    # for testing purposes 
+    # GAUGE #3
     min_angle = 45
-    max_angle = 320
-    min_value = 0
-    max_value = 200
+    max_angle = 315
+    min_value = -30
+    max_value = 22
     units = "PSI"
 
     return min_angle, max_angle, min_value, max_value, units, x, y, r
@@ -145,13 +236,13 @@ def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, 
     # plt.xticks([]),plt.yticks([])
     # plt.show()
 
-    # # plt.imshow(gray2)
+    # plt.imshow(gray2)
     # plt.imshow(th_gaussian)
     # plt.title('plotting gauge w/ gaussian')
     # plt.xticks([]),plt.yticks([])
     # plt.show()
 
-    # otsu's thresholding looks terrible on this gauge
+    # # otsu's thresholding 
     # plt.imshow(th_otsu)
     # plt.title('plotting gauge w/ OTSU')
     # plt.xticks([]), plt.yticks([])
@@ -159,9 +250,11 @@ def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, 
 
     # find lines
     height, width = img.shape[:2]
+    # print('Height of picture: {}'.format(height))
+    # print('Width of picture: {}'.format(width))
 
-    minLineLength = np.around(height*.05)  # min 10% of picture height
-    print('minLineLength is {}'.format(minLineLength))
+    minLineLength = np.around(height*.10)  # min 10% of picture height
+    # print('minLineLength is {}'.format(minLineLength))
     maxLineGap = 0
 
     lines = cv2.HoughLinesP(image=th, rho=3, theta=np.pi / 180, threshold=100,minLineLength = minLineLength, maxLineGap = maxLineGap)  # rho is set to 3 to detect more lines, easier to get more then filter them out later
@@ -184,7 +277,7 @@ def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, 
     # Lines are in the format: 
     # [x1, y1, x2, y2]
     for line in lines:
-        x1,y1,x2,y2 = line[0,:]
+        x1,y1,x2,y2 = line[0,:] # line is [[x1, y1, x2, y2]]
 
         diff1 = dist_2_pts(x, y, x1, y1)  # x, y is center of circle
         diff2 = dist_2_pts(x, y, x2, y2)  # x, y is center of circle
@@ -199,13 +292,13 @@ def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, 
             # add to final list
             final_line_list.append([x1, y1, x2, y2])
 
-    # #testing only, show all lines after filtering
-    # for i in range(0,len(final_line_list)):
-    #     x1 = final_line_list[i][0]
-    #     y1 = final_line_list[i][1]
-    #     x2 = final_line_list[i][2]
-    #     y2 = final_line_list[i][3]
-    #     cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    #testing only, show all lines after filtering
+    for i in range(0,len(final_line_list)):
+        x1 = final_line_list[i][0]
+        y1 = final_line_list[i][1]
+        x2 = final_line_list[i][2]
+        y2 = final_line_list[i][3]
+        cv2.line(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
     # assumes the first line is the best one
     print(final_line_list)
@@ -266,7 +359,7 @@ def get_current_value(img, min_angle, max_angle, min_value, max_value, x, y, r, 
     return new_value
 
 def main():
-    gauge_number = 2
+    gauge_number = 3
     file_type='jpg'
 
     # image name format 'gauge-#.jpg', for example 'gauge-5.jpg'
